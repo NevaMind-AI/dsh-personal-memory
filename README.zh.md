@@ -116,6 +116,7 @@ memu-agent prepare \
 | `maxOutputBytes` | `65536` | stdout/stderr 各自的大小上限 |
 | `processGraceMs` | `1000` | 子进程终止宽限时间 |
 | `maxQueryChars` | `8000` | query 上限；超出时保留最新尾部 |
+| `maxRecordChars` | `4000` | 单条镜像记录的内容上限，避免单次嘈杂的工具输出淹没挖掘任务 |
 
 关闭自动召回、保留显式搜索和会话侧写：
 
@@ -129,6 +130,7 @@ memu-agent prepare \
     maxOutputBytes: 65536
     processGraceMs: 1000
     maxQueryChars: 8000
+    maxRecordChars: 4000
 ```
 
 ## 安全与隐私

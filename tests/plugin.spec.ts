@@ -129,6 +129,54 @@ describe('transcript compatibility rows', () => {
     expect(sessionEventToTranscriptRecord('session-a', injected)).toBeUndefined()
   })
 
+  it('bounds an oversized tool result so one noisy command cannot flood a mining job', () => {
+    const huge = 'x'.repeat(50_000)
+    const result = event({
+      type: 'tool/result',
+      seq: 9,
+      time: 1_700_000_000_000,
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          id: 'message-9',
+          role: 'user',
+          source: { kind: 'tool', callId: 'call-9' },
+          content: [{
+            type: 'tool-result',
+            toolCallId: 'call-9',
+            content: [{ type: 'text', text: huge }],
+          }],
+        },
+      },
+    })
+
+    const row = sessionEventToTranscriptRecord('session-a', result, 4_000)
+    const serialized = JSON.stringify(row?.content)
+    expect(serialized.length).toBeLessThan(4_200)
+    expect(serialized).toContain('truncated by memory-memu at 4000 characters')
+    // Still a tool row: the bound must not change how memU classifies it.
+    expect(row).toMatchObject({ role: 'tool', tool_call_id: 'call-9' })
+  })
+
+  it('leaves content under the bound exactly as it was', () => {
+    const small = event({
+      type: 'user/message',
+      seq: 10,
+      time: 1_700_000_000_000,
+      data: {
+        id: 'message-10',
+        role: 'user',
+        content: [{ type: 'text', text: 'short' }],
+        source: { kind: 'user' },
+      },
+    })
+
+    expect(sessionEventToTranscriptRecord('session-a', small, 4_000)).toMatchObject({
+      content: [{ type: 'text', text: 'short' }],
+    })
+  })
+
   it('writes generic-adapter tool-call and result rows', () => {
     const call = event({
       type: 'tool/call',

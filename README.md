@@ -27,17 +27,28 @@ memu-agent doctor
 
 ## Install
 
-Published package:
+From git (the package is not on npm yet):
 
 ```sh
-dsh plugin --profile web add @nevamind-ai/dsh-memu
+dsh plugin --profile web add github:NevaMind-AI/dsh-personal-memory
 ```
+
+A git install fetches sources, not built artifacts, so pnpm must be allowed to run this package's `prepare` build. The first `add` fails and prints the exact package key; put it in the profile's `pnpm-workspace.yaml` and re-run:
+
+```yaml
+allowBuilds:
+  '@nevamind-ai/dsh-memu': true
+```
+
+That allowance is permission to execute this package's code at install time — pin a commit (`github:NevaMind-AI/dsh-personal-memory#<sha>`) so a later push cannot silently change what runs.
 
 Local checkout:
 
 ```sh
 dsh plugin --profile web add .
 ```
+
+Once published, `dsh plugin --profile web add @nevamind-ai/dsh-memu` installs prebuilt code and needs no build allowance.
 
 Install the bundle separately into every DSH profile that should use memory. Restart that profile after the initial installation; later `cordis.patch.yml` changes are hot-reloaded by DSH.
 
@@ -117,6 +128,7 @@ Override the inserted row in a profile or home `cordis.patch.yml`. DSH patches r
 | `maxOutputBytes` | `65536` | Per-stream retrieval output cap |
 | `processGraceMs` | `1000` | Child-process termination grace |
 | `maxQueryChars` | `8000` | Query cap; the newest end is retained |
+| `maxRecordChars` | `4000` | Per-record mirrored content cap, so one noisy tool result cannot flood a mining job |
 
 Example with automatic retrieval disabled while keeping explicit search and capture:
 
@@ -130,6 +142,7 @@ Example with automatic retrieval disabled while keeping explicit search and capt
     maxOutputBytes: 65536
     processGraceMs: 1000
     maxQueryChars: 8000
+    maxRecordChars: 4000
 ```
 
 ## Security and privacy

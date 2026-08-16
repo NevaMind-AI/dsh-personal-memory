@@ -32,6 +32,7 @@ const DEFAULT_TIMEOUT_MS = 10_000
 const DEFAULT_MAX_OUTPUT_BYTES = 65_536
 const DEFAULT_PROCESS_GRACE_MS = 1_000
 const DEFAULT_MAX_QUERY_CHARS = 8_000
+const DEFAULT_MAX_RECORD_CHARS = 4_000
 const DEFAULT_TRANSCRIPT_DIR = join(homedir(), '.memu', 'hosts', 'deepseek-harness', 'sessions')
 const MEMORY_PROMPT_ORDER = 175
 
@@ -53,6 +54,15 @@ export interface Config {
   processGraceMs?: number
   /** Maximum characters passed to memU as one retrieval query. */
   maxQueryChars?: number
+  /**
+   * Maximum serialized characters of one mirrored record's content.
+   *
+   * Tool results are unbounded at the source — a build log or a whole file read
+   * arrives verbatim — and every mirrored byte is later inlined into a memU job
+   * file for an agent to read. Without a bound one noisy command can crowd a
+   * mining agent's context and starve the rest of the session.
+   */
+  maxRecordChars?: number
 }
 
 /** Schemastery validation and displayed defaults for {@link Config}. */
@@ -65,6 +75,7 @@ export const Config: z<Config> = z.object({
   maxOutputBytes: z.number().default(DEFAULT_MAX_OUTPUT_BYTES),
   processGraceMs: z.number().default(DEFAULT_PROCESS_GRACE_MS),
   maxQueryChars: z.number().default(DEFAULT_MAX_QUERY_CHARS),
+  maxRecordChars: z.number().default(DEFAULT_MAX_RECORD_CHARS),
 })
 
 /** One validated record returned by memU's progressive retrieval layers. */
@@ -86,6 +97,7 @@ interface ResolvedConfig {
   maxOutputBytes: number
   processGraceMs: number
   maxQueryChars: number
+  maxRecordChars: number
 }
 
 interface MemuClient {
@@ -130,6 +142,7 @@ function resolveConfig(config: Config): ResolvedConfig {
     maxOutputBytes: positiveInteger('maxOutputBytes', config.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES),
     processGraceMs: positiveInteger('processGraceMs', config.processGraceMs ?? DEFAULT_PROCESS_GRACE_MS),
     maxQueryChars: positiveInteger('maxQueryChars', config.maxQueryChars ?? DEFAULT_MAX_QUERY_CHARS),
+    maxRecordChars: positiveInteger('maxRecordChars', config.maxRecordChars ?? DEFAULT_MAX_RECORD_CHARS),
   }
 }
 
@@ -258,43 +271,73 @@ function createMemuClient(subprocess: SubprocessRuntime, config: ResolvedConfig)
 }
 
 /**
+ * Bound one record's content to a serialized character budget.
+ *
+ * Replaces over-long content with a single marked text block rather than
+ * clipping the JSON, so the row stays parseable and memU's dialect sniffer
+ * still classifies it exactly as it would have unclipped.
+ * @param content - the record content about to be mirrored.
+ * @param maxChars - serialized character budget.
+ * @returns the original content, or a marked truncation block.
+ */
+function boundRecordContent(content: unknown, maxChars: number): unknown {
+  const serialized = JSON.stringify(content)
+  if (serialized === undefined || serialized.length <= maxChars) return content
+  return [{
+    type: 'text',
+    text: `${serialized.slice(0, maxChars)}\n… [truncated by memory-memu at ${maxChars} characters]`,
+  }]
+}
+
+/**
  * Convert one durable DSH event into a clean memU transcript row.
  * Plugin-injected context and other log-only events deliberately return undefined.
  * @param sessionId - owning DSH session identity.
  * @param event - committed session event.
+ * @param maxRecordChars - serialized content budget for one row.
  * @returns a generic-adapter row, or undefined when the event is not mineable conversation/tool traffic.
  */
 export function sessionEventToTranscriptRecord(
   sessionId: string,
   event: SessionEvent,
+  maxRecordChars: number = DEFAULT_MAX_RECORD_CHARS,
 ): MemuTranscriptRecord | undefined {
   const base = {
     timestamp: new Date(event.time).toISOString(),
     session_id: sessionId,
     dsh_seq: event.seq,
   }
+  const bound = (content: unknown): unknown => boundRecordContent(content, maxRecordChars)
   switch (event.type) {
     case 'user/message':
       if (event.data.source.kind !== 'user') return undefined
-      return { ...base, role: 'user', content: event.data.content }
+      return { ...base, role: 'user', content: bound(event.data.content) }
     case 'assistant/message':
-      return { ...base, role: 'assistant', content: event.data.message.content }
+      return { ...base, role: 'assistant', content: bound(event.data.message.content) }
     case 'tool/call':
       return {
         ...base,
         role: 'assistant',
         content: null,
+        // Arguments are model-generated and can carry a whole file body, so
+        // they take the same budget. The row keeps a non-empty `tool_calls`,
+        // which is what makes memU classify it as tool traffic.
         tool_calls: [{
           id: event.data.callId,
           type: 'function',
-          function: { name: event.data.name, arguments: event.data.arguments },
+          function: {
+            name: event.data.name,
+            arguments: event.data.arguments.length <= maxRecordChars
+              ? event.data.arguments
+              : `${event.data.arguments.slice(0, maxRecordChars)}\n… [truncated by memory-memu at ${maxRecordChars} characters]`,
+          },
         }],
       }
     case 'tool/result':
       return {
         ...base,
         role: 'tool',
-        content: event.data.message.content,
+        content: bound(event.data.message.content),
         tool_call_id: event.data.message.source.callId,
       }
     default:
@@ -317,7 +360,7 @@ async function appendPrivate(path: string, line: string): Promise<void> {
   }
 }
 
-function registerTranscriptCapture(ctx: Context, transcriptDir: string): void {
+function registerTranscriptCapture(ctx: Context, transcriptDir: string, maxRecordChars: number): void {
   // Scheduled self-evolve runs opt out so memU never learns its own bookkeeping.
   if (process.env.MEMU_BRIDGING_RUN === '1') return
   const ready = mkdir(transcriptDir, { recursive: true, mode: 0o700 })
@@ -325,7 +368,7 @@ function registerTranscriptCapture(ctx: Context, transcriptDir: string): void {
   const writes = new Map<Session, Promise<void>>()
 
   const enqueue = (session: Session, event: SessionEvent): void => {
-    const record = sessionEventToTranscriptRecord(session.id, event)
+    const record = sessionEventToTranscriptRecord(session.id, event, maxRecordChars)
     if (record === undefined) return
     const previous = writes.get(session) ?? Promise.resolve()
     const next = previous
@@ -443,5 +486,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     }, { prepend: true })
   }
 
-  if (resolved.captureTranscripts) registerTranscriptCapture(ctx, resolved.transcriptDir)
+  if (resolved.captureTranscripts) {
+    registerTranscriptCapture(ctx, resolved.transcriptDir, resolved.maxRecordChars)
+  }
 }

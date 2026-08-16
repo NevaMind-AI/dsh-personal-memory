@@ -1,0 +1,6 @@
+- insert:
+    - id: memory-memu
+      name: '@nevamind-ai/dsh-memu'
+      config:
+        command: memu-agent
+        autoRetrieve: true

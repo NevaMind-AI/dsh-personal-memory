@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+
+    // In-package imports carry explicit `.ts` specifiers, matching dsh house
+    // style; the compiler rewrites them to `.js` on emit.
+    "rewriteRelativeImportExtensions": true,
+
+    // The published dsh packages declare a peer (`@deepseek-ai/dsh-type-meta`)
+    // that is not on npm yet. It is referenced only from inside their
+    // declaration files, so skipping lib checks keeps this package building
+    // against the real published types instead of vendored copies.
+    "skipLibCheck": true,
+
+    "rootDir": "src",
+    "outDir": "lib",
+    "declaration": true,
+    "declarationDir": "lib/types",
+    "sourceMap": false,
+    "declarationMap": false
+  },
+  "include": ["src"]
+}

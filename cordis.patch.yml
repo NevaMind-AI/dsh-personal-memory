@@ -1,0 +1,28 @@
+# The configuration layer this bundle contributes. `dsh plugin add` appends the
+# package to the profile's bundle list, and the loader applies this patch in that
+# order — so a user's own profile patch can override the row below by id without
+# touching this package.
+#
+# Every key is the schema default, spelled out because a patch replaces a row's
+# entire `config` value rather than deep-merging: a user overriding one key must
+# restate the rest, and having them here is what makes that copyable.
+- insert:
+    - id: personal-memory
+      name: dsh-personal-memory
+      config:
+        # The memU host-adapter binary. `memu-agent` is the generic adapter.
+        binary: memu-agent
+        # The write-back mirror memU's bridging task mines. Change this and the
+        # scheduled task's --session-dir together.
+        sessionDir: ~/.dsh/memu-sessions
+        # Empty derives the per-project subdirectory from the session's cwd.
+        project: ''
+        # The record seam: mirror live sessions into memU's layout.
+        writeBack: true
+        # The inject seam: the memory_search tool.
+        retrieve: true
+        # The standing instruction to search memory before answering.
+        guidance: true
+        timeoutMs: 20000
+        maxToolResultChars: 4000
+        maxRetrieveChars: 24000
